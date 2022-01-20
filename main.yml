@@ -1,0 +1,104 @@
+---
+- name: Shutdown supervisord
+  command: supervisorctl -c /home/cdiws/supervisord.conf shutdown
+  become: yes
+  become_user: cdiws
+
+- name: Port reuse sleep
+  command: /bin/sleep 2
+
+- name: Start supervisord
+  command: supervisord -c /home/cdiws/supervisord.conf
+  become: yes
+  become_user: cdiws
+
+- name: stop service pusti
+  supervisorctl:
+    name: pusti
+    config: "/home/cdiws/supervisord.conf"
+    state: stopped
+
+- name: clone specified tag for pusticonf
+  delegate_to: localhost  
+  git:
+    repo: git@libalex.tw.svc.litv.tv:pusticonf
+    dest: ~/cdiadmin/pusticonf
+    version: "{{ tag }}"
+    force: yes
+  become: no
+
+- name: deploy helper init
+  deploy_helper:
+    path: "/home/cdiws/cdi"
+    state: query
+
+- name: init cdi deployment
+  deploy_helper:
+    path: "/home/cdiws/cdi"
+    state: present
+
+- name: Create release directory
+  file:
+    path: "{{ deploy_helper.new_release_path }}"
+    state: directory
+    owner: cdiws
+    group: cdiws
+    mode: 0700
+
+- name: create conf directory
+  file:
+    state: directory
+    path: "{{ deploy_helper.new_release_path }}/conf"
+    owner: cdiws
+    group: cdiws
+
+- name: get pusti file from jenkins to remote host
+  get_url:
+    url: "http://172.23.200.197:8080/job/pusti-{{ platform }}/{{ build_num }}/artifact/pusti" 
+    dest: "{{ deploy_helper.new_release_path }}/pusti"
+    owner: cdiws
+    group: cdiws 
+    mode: 0755
+
+- name: copy config to remote host
+  copy:
+    src: "~/cdiadmin/pusticonf/conf/{{ platform }}.yaml"
+    dest: "{{ deploy_helper.new_release_path }}/conf/conf.yaml"
+    owner: cdiws
+    group: cdiws
+    mode: 0755
+
+- name: Finalize deployment
+  deploy_helper:
+    path: "/home/cdiws/cdi"
+    release: "{{ deploy_helper.new_release }}"
+    state: finalize
+    clean: true
+    keep_releases: 3
+
+- name: copy supervisord.conf to remote host
+  copy:
+    src: "~/cdiadmin/pusticonf/supervisord.conf"
+    dest: "/home/cdiws/supervisord.conf"
+
+- name: reread service pusti
+  supervisorctl:
+    name: pusti
+    config: "/home/cdiws/supervisord.conf"
+    state: present
+
+- name: restart service pusti
+  supervisorctl:
+    name: pusti
+    config: "/home/cdiws/supervisord.conf"
+    state: restarted
+
+- name: wait for port 8290 to become open on the host
+  wait_for: 
+    port: "8290" 
+    delay: "1" 
+    timeout: "60"
+
+- name: Check pusti HTTP ports
+  uri: 
+    url: "http://localhost:8290/Ping"
